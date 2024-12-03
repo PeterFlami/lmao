@@ -147,9 +147,9 @@ function renderTable(pool, nodeName, res) {
         <body>
             <nav>
                 <a href="/">Home</a>
-                <a href="/node1/games">Node 1</a>
-                <a href="/node2/games">Node 2</a>
-                <a href="/node3/games">Node 3</a>
+                <a href="/node1/games">All Games</a>
+                <a href="/node2/games">Games Released Before 2010</a>
+                <a href="/node3/games">Games Released After 2010</a>
             </nav>
             <div class="container">
                 <h1>${nodeName} - Games</h1>
@@ -272,29 +272,82 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
     app.put(`${routeBase}/games/:id`, (req, res) => {
         const { id } = req.params;
         const { name, release_date, price, developers, publishers } = req.body;
-        const query = 'UPDATE games SET name = ?, release_date = ?, price = ?, developers = ?, publishers = ? WHERE app_id = ?';
-
-        pool.query(query, [name, release_date, price, developers, publishers, id], (err) => {
+    
+        // Check the current release_date of the game
+        const checkQuery = 'SELECT release_date FROM games WHERE app_id = ?';
+        pool.query(checkQuery, [id], (err, results) => {
             if (err) {
-                res.status(500).send('Error updating game');
-                return;
+                console.error('Error fetching current release_date:', err);
+                return res.status(500).send('Internal server error while updating the game.');
             }
-
-            // Replicate to Node 1 if not already Node 1
-            if (nodeName !== 'Node1') {
-                replicateUpdate(poolNode1, query, [name, release_date, price, developers, publishers, id], 'Node 1');
+    
+            else if (results.length === 0) {
+                return res.status(404).send('Game not found.');
+            }
+    
+            const currentReleaseDate = new Date(results[0].release_date);
+            const newReleaseDate = new Date(release_date);
+    
+            // Step 2: Determine if node assignment needs to change
+            let targetPool = null; // The pool to which the game should be moved
+            let currentPool = null; // The pool from which the game should be removed
+    
+            if (currentReleaseDate.getFullYear() < 2010 && newReleaseDate.getFullYear() >= 2010) {
+                // Moving from Node 2 to Node 3
+                currentPool = poolNode2;
+                targetPool = poolNode3;
+            } else if (currentReleaseDate.getFullYear() >= 2010 && newReleaseDate.getFullYear() < 2010) {
+                // Moving from Node 3 to Node 2
+                currentPool = poolNode3;
+                targetPool = poolNode2;
+            }
+    
+            if (targetPool && currentPool) {
+                // Delete the game from the current node
+                const deleteQuery = 'DELETE FROM games WHERE app_id = ?';
+                currentPool.query(deleteQuery, [id], (err) => {
+                    if (err) {
+                        console.error('Error deleting game from current node:', err);
+                        return res.status(500).send('Internal server error while transferring the game.');
+                    }
+    
+                    // Insert the updated game into the target node
+                    const insertQuery = 'INSERT INTO games (app_id, name, release_date, price, developers, publishers) VALUES (?, ?, ?, ?, ?, ?)';
+                    targetPool.query(insertQuery, [id, name, release_date, price, developers, publishers], (err) => {
+                        if (err) {
+                            console.error('Error adding game to target node:', err);
+                            return res.status(500).send('Internal server error while transferring the game.');
+                        }
+    
+                        res.redirect(`${routeBase}/games`);
+                    });
+                });
+                if (nodeName !== 'Node1') {
+                    const updateQuery = 'UPDATE games SET name = ?, release_date = ?, price = ?, developers = ?, publishers = ? WHERE app_id = ?';
+                    replicateUpdate(poolNode1, updateQuery, [name, release_date, price, developers, publishers, id], 'Node 1');
+                }
             } else {
-                // Replicate to Node 2 or Node 3 based on release date
-                const targetNode = new Date(release_date).getFullYear() < 2010 ? poolNode2 : poolNode3;
-                replicateUpdate(targetNode, query, [name, release_date, price, developers, publishers, id], targetNode === poolNode2 ? 'Node 2' : 'Node 3');
+                // If no node change is needed, update the game in the current node
+                const updateQuery = 'UPDATE games SET name = ?, release_date = ?, price = ?, developers = ?, publishers = ? WHERE app_id = ?';
+                pool.query(updateQuery, [name, release_date, price, developers, publishers, id], (err) => {
+                    if (err) {
+                        console.error('Error updating game:', err);
+                        return res.status(500).send('Internal server error while updating the game.');
+                    }
+    
+                    // Replicate changes to Node 1 if necessary
+                    else if (nodeName !== 'Node1') {
+                        replicateUpdate(poolNode1, updateQuery, [name, release_date, price, developers, publishers, id], 'Node 1');
+                    } else {
+                        const targetNode = new Date(release_date).getFullYear() < 2010 ? poolNode2 : poolNode3;
+                        replicateUpdate(targetNode, updateQuery, [name, release_date, price, developers, publishers, id], targetNode === poolNode2 ? 'Node 2' : 'Node 3');
+                    }
+    
+                    res.redirect(`${routeBase}/games`);
+                });
             }
-
-            // Re-render the table after the update
-            renderTable(pool, nodeName, res);
         });
     });
-
-    // Delete (Remove game)
     app.delete(`${routeBase}/games/:id`, (req, res) => {
         const { id } = req.params;
         const query = 'DELETE FROM games WHERE app_id = ?';
@@ -318,7 +371,7 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
             renderTable(pool, nodeName, res);
         });
     });
-}
+}    
 
 
 // Partitioning rules
@@ -399,9 +452,9 @@ app.get('/', (req, res) => {
         <body>
             <nav>
                 <a href="/">Home</a>
-                <a href="/node1/games">Node 1</a>
-                <a href="/node2/games">Node 2</a>
-                <a href="/node3/games">Node 3</a>
+                <a href="/node1/games">All Games</a>
+                <a href="/node2/games">Games Released Before 2010</a>
+                <a href="/node3/games">Games Released After 2010</a>
             </nav>
             <div class="container">
                 <h1>Welcome to the Distributed Database System</h1>
