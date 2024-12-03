@@ -70,7 +70,8 @@ function renderTable(pool, nodeName, res) {
                     font-family: Arial, sans-serif;
                     margin: 0;
                     padding: 0;
-                    background-color: #f4f4f9;
+                    background-color: #f9f9f9;
+                    color: #333;
                 }
                 nav {
                     background-color: #007bff;
@@ -82,19 +83,24 @@ function renderTable(pool, nodeName, res) {
                     color: white;
                     text-decoration: none;
                     margin: 0 15px;
-                    font-size: 1.2rem;
+                    font-size: 1rem;
+                    font-weight: bold;
+                }
+                nav a:hover {
+                    text-decoration: underline;
                 }
                 .container {
-                    max-width: 900px;
-                    margin: 20px auto;
+                    max-width: 1200px;
+                    margin: 30px auto;
                     background: white;
                     padding: 20px;
                     border-radius: 8px;
-                    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+                    text-align: center;
                 }
                 h1 {
-                    text-align: center;
-                    color: #333;
+                    color: #444;
+                    margin-bottom: 20px;
                 }
                 table {
                     width: 100%;
@@ -103,15 +109,19 @@ function renderTable(pool, nodeName, res) {
                 }
                 th, td {
                     border: 1px solid #ddd;
-                    padding: 8px;
-                    text-align: left;
+                    padding: 10px;
+                    text-align: center;
                 }
                 th {
                     background-color: #f4f4f9;
+                    color: #333;
                 }
                 form {
                     display: flex;
                     gap: 10px;
+                    justify-content: center;
+                    flex-wrap: wrap;
+                    margin-bottom: 20px;
                 }
                 input, button {
                     padding: 8px;
@@ -126,6 +136,11 @@ function renderTable(pool, nodeName, res) {
                 }
                 button:hover {
                     background-color: #0056b3;
+                }
+                .actions {
+                    display: flex;
+                    gap: 10px;
+                    justify-content: center;
                 }
             </style>
         </head>
@@ -187,7 +202,6 @@ function renderTable(pool, nodeName, res) {
                 </tr>
             `;
         });
-        
 
         html += `
                     </tbody>
