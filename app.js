@@ -221,10 +221,10 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
 
     // Read (List games)
     app.get(`${routeBase}/games`, (req, res) => {
-        renderTable(pool, nodeName, res);
+        renderTable(pool, nodeName, res);  // Display the list of games
     });
 
-    // Create
+    // Create (Add game)
     app.post(`${routeBase}/games`, (req, res) => {
         const { app_id, name, release_date, price, developers, publishers } = req.body;
 
@@ -256,14 +256,19 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
                         [app_id, name, release_date, price, developers, publishers],
                         'Node 1'
                     );
+                } else {
+                    // Replicate to Node 2 or Node 3 based on release date
+                    const targetNode = new Date(release_date).getFullYear() < 2010 ? poolNode2 : poolNode3;
+                    replicateUpdate(targetNode, query, [app_id, name, release_date, price, developers, publishers], targetNode === poolNode2 ? 'Node 2' : 'Node 3');
                 }
 
-                res.redirect(`${routeBase}/games`);
+                // Re-render the table after the creation
+                renderTable(pool, nodeName, res);
             });
         });
     });
 
-    // Update
+    // Update (Edit game)
     app.put(`${routeBase}/games/:id`, (req, res) => {
         const { id } = req.params;
         const { name, release_date, price, developers, publishers } = req.body;
@@ -278,23 +283,18 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
             // Replicate to Node 1 if not already Node 1
             if (nodeName !== 'Node1') {
                 replicateUpdate(poolNode1, query, [name, release_date, price, developers, publishers, id], 'Node 1');
+            } else {
+                // Replicate to Node 2 or Node 3 based on release date
+                const targetNode = new Date(release_date).getFullYear() < 2010 ? poolNode2 : poolNode3;
+                replicateUpdate(targetNode, query, [name, release_date, price, developers, publishers, id], targetNode === poolNode2 ? 'Node 2' : 'Node 3');
             }
 
-            // Replicate from Node 1 to Node 2 or Node 3
-            if (nodeName === 'Node1') {
-                const newReleaseDate = new Date(release_date);
-                if (newReleaseDate.getFullYear() < 2010) {
-                    replicateUpdate(poolNode2, query, [name, release_date, price, developers, publishers, id], 'Node 2');
-                } else {
-                    replicateUpdate(poolNode3, query, [name, release_date, price, developers, publishers, id], 'Node 3');
-                }
-            }
-
-            res.redirect(`${routeBase}/games`);
+            // Re-render the table after the update
+            renderTable(pool, nodeName, res);
         });
     });
 
-    // Delete
+    // Delete (Remove game)
     app.delete(`${routeBase}/games/:id`, (req, res) => {
         const { id } = req.params;
         const query = 'DELETE FROM games WHERE app_id = ?';
@@ -302,12 +302,24 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
         pool.query(query, [id], (err) => {
             if (err) {
                 res.status(500).send('Error deleting game');
-            } else {
-                res.redirect(`${routeBase}/games`);
+                return;
             }
+
+            // Replicate to Node 1 if not already Node 1
+            if (nodeName !== 'Node1') {
+                replicateUpdate(poolNode1, query, [id], 'Node 1');
+            } else {
+                // Replicate to both Node 2 and Node 3
+                replicateUpdate(poolNode2, query, [id], 'Node 2');
+                replicateUpdate(poolNode3, query, [id], 'Node 3');
+            }
+
+            // Re-render the table after the deletion
+            renderTable(pool, nodeName, res);
         });
     });
 }
+
 
 // Partitioning rules
 const node2Partition = (releaseDate) => releaseDate.getFullYear() < 2010;
