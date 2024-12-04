@@ -51,7 +51,7 @@ function replicateUpdate(pool, query, params, nodeName) {
 }
 
 // Helper function to render games as HTML table
-function renderTable(pool, nodeName, res) {
+function renderTable(pool, nodeName, res, message = '') {
     pool.query('SELECT * FROM games', (err, results) => {
         if (err) {
             res.status(500).send('Database error');
@@ -142,6 +142,9 @@ function renderTable(pool, nodeName, res) {
                     gap: 10px;
                     justify-content: center;
                 }
+                .notification{
+                    color:red;
+                }
             </style>
         </head>
         <body>
@@ -162,6 +165,7 @@ function renderTable(pool, nodeName, res) {
                     <input type="text" name="publishers" placeholder="Publishers" required>
                     <button type="submit">Add Game</button>
                 </form>
+                ${message ? `<div class="notification ${message.includes('success') ? 'success' : ''}">${message}</div>` : ''}
                 <table>
                     <thead>
                         <tr>
@@ -230,22 +234,27 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
 
         // Validate duplicate App ID
         const checkQuery = 'SELECT app_id FROM games WHERE app_id = ?';
-        pool.query(checkQuery, [app_id], (err, results) => {
-            if (results.length > 0) {
-                return res.status(400).send('Error: App ID already exists. Please use a unique App ID.');
+        pool.query(checkQuery, [app_id, name], (err, results) => {
+            if (err) {
+                console.error('Error checking for duplicates:', err);
+                return renderTable(pool, nodeName, res, 'Error checking database. Please try again.');
             }
+    
+            if (results.length > 0) {
+                return renderTable(pool, nodeName, res, 'Error: Duplicate App ID or Game Name found.');
+            }
+    
 
             // Validate partitioning rule
             if (partitionFilter && !partitionFilter(new Date(release_date))) {
-                return res.status(400).send(`Game does not match ${nodeName} partitioning rules.`);
+                return renderTable(pool, nodeName, res, `Game does not match ${nodeName} partitioning rules.`);
             }
 
             // Insert game into the current node
             const query = 'INSERT INTO games (app_id, name, release_date, price, developers, publishers) VALUES (?, ?, ?, ?, ?, ?)';
             pool.query(query, [app_id, name, release_date, price, developers, publishers], (err) => {
                 if (err) {
-                    res.status(500).send('Error adding game');
-                    return;
+                    return renderTable(pool, nodeName, res, 'Error adding game. Please try again.');
                 }
 
                 // Replicate to Node 1 if not already Node 1
@@ -263,7 +272,7 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
                 }
 
                 // Re-render the table after the creation
-                renderTable(pool, nodeName, res);
+                renderTable(pool, nodeName, res, 'Game added successfully.');
             });
         });
     });
@@ -278,26 +287,23 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
         pool.query(checkQuery, [id], (err, results) => {
             if (err) {
                 console.error('Error fetching current release_date:', err);
-                return res.status(500).send('Internal server error while updating the game.');
+                return renderTable(pool, nodeName, res, 'Error fetching game details for update.');
             }
     
             else if (results.length === 0) {
-                return res.status(404).send('Game not found.');
+                return renderTable(pool, nodeName, res, 'Error: Game not found.');
             }
     
             const currentReleaseDate = new Date(results[0].release_date);
             const newReleaseDate = new Date(release_date);
     
-            // Step 2: Determine if node assignment needs to change
-            let targetPool = null; // The pool to which the game should be moved
-            let currentPool = null; // The pool from which the game should be removed
+            let targetPool = null;
+            let currentPool = null; 
     
             if (currentReleaseDate.getFullYear() < 2010 && newReleaseDate.getFullYear() >= 2010) {
-                // Moving from Node 2 to Node 3
                 currentPool = poolNode2;
                 targetPool = poolNode3;
             } else if (currentReleaseDate.getFullYear() >= 2010 && newReleaseDate.getFullYear() < 2010) {
-                // Moving from Node 3 to Node 2
                 currentPool = poolNode3;
                 targetPool = poolNode2;
             }
@@ -307,16 +313,16 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
                 const deleteQuery = 'DELETE FROM games WHERE app_id = ?';
                 currentPool.query(deleteQuery, [id], (err) => {
                     if (err) {
-                        console.error('Error deleting game from current node:', err);
-                        return res.status(500).send('Internal server error while transferring the game.');
+                        console.error('Error updating game:', err);
+                        return renderTable(pool, nodeName, res, 'Error updating game details.');
                     }
     
                     // Insert the updated game into the target node
                     const insertQuery = 'INSERT INTO games (app_id, name, release_date, price, developers, publishers) VALUES (?, ?, ?, ?, ?, ?)';
                     targetPool.query(insertQuery, [id, name, release_date, price, developers, publishers], (err) => {
                         if (err) {
-                            console.error('Error adding game to target node:', err);
-                            return res.status(500).send('Internal server error while transferring the game.');
+                            console.error('Error updating game:', err);
+                        return renderTable(pool, nodeName, res, 'Error updating game details.');
                         }
     
                         res.redirect(`${routeBase}/games`);
@@ -332,7 +338,7 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
                 pool.query(updateQuery, [name, release_date, price, developers, publishers, id], (err) => {
                     if (err) {
                         console.error('Error updating game:', err);
-                        return res.status(500).send('Internal server error while updating the game.');
+                        return renderTable(pool, nodeName, res, 'Error updating game details.');
                     }
     
                     // Replicate changes to Node 1 if necessary
@@ -343,7 +349,7 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
                         replicateUpdate(targetNode, updateQuery, [name, release_date, price, developers, publishers, id], targetNode === poolNode2 ? 'Node 2' : 'Node 3');
                     }
     
-                    res.redirect(`${routeBase}/games`);
+                    return renderTable(pool, nodeName, res, 'Game updated successfully.');
                 });
             }
         });
@@ -354,8 +360,7 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
 
         pool.query(query, [id], (err) => {
             if (err) {
-                res.status(500).send('Error deleting game');
-                return;
+                return renderTable(pool, nodeName, res, 'Error deleting the game. Please try again.');
             }
 
             // Replicate to Node 1 if not already Node 1
@@ -368,7 +373,7 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
             }
 
             // Re-render the table after the deletion
-            renderTable(pool, nodeName, res);
+            return renderTable(pool, nodeName, res, 'Game deleted successfully.');
         });
     });
 }    
@@ -473,5 +478,5 @@ app.get('/', (req, res) => {
 
 // Start server
 app.listen(3000, () => {
-    console.log('Server is running on http://localhost:3000');
+    console.log('Server is running!');
 });
