@@ -41,11 +41,52 @@ const poolNode3 = mysql.createPool({
     queueLimit: 0
 });
 
-// Helper function to replicate updates
+let isCentralNodeOnline = true;
+let isNode2Online = true;
+let isNode3Online = true;
+
+const retryQueue = [];
+
+app.post('/simulate/failure', (req, res) => {
+    const { node, status } = req.body;
+    if (node === 'central') isCentralNodeOnline = status;
+    else if (node === 'node2') isNode2Online = status;
+    else if (node === 'node3') isNode3Online = status;
+    res.send(`Simulated ${node} status: ${status}`);
+});
+
+// queueing peterson's algo
+setInterval(() => {
+    retryQueue.forEach((transaction, index) => {
+        const { query, params, node } = transaction;
+        const pool = node === 'node2' ? poolNode2 : node === 'node3' ? poolNode3 : poolNode1;
+
+        if ((node === 'central' && isCentralNodeOnline) ||
+            (node === 'node2' && isNode2Online) ||
+            (node === 'node3' && isNode3Online)) {
+            pool.query(query, params, (err) => {
+                if (!err) retryQueue.splice(index, 1);
+            });
+        }
+    });
+}, 5000);
+
 function replicateUpdate(pool, query, params, nodeName) {
+    const nodeStatus =
+        nodeName === 'Node 1' ? isCentralNodeOnline :
+        nodeName === 'Node 2' ? isNode2Online :
+        nodeName === 'Node 3' ? isNode3Online : true;
+
+    if (!nodeStatus) {
+        retryQueue.push({ query, params, node: nodeName.toLowerCase() });
+        console.warn(`${nodeName} is unavailable. Transaction queued for retry.`);
+        return;
+    }
+
     pool.query(query, params, (err) => {
         if (err) {
             console.error(`Error replicating to ${nodeName}:`, err);
+            retryQueue.push({ query, params, node: nodeName.toLowerCase() });
         }
     });
 }
@@ -234,23 +275,21 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
 
         // Validate duplicate App ID
         const checkQuery = 'SELECT app_id FROM games WHERE app_id = ?';
-        pool.query(checkQuery, [app_id, name], (err, results) => {
+        pool.query(checkQuery, [app_id], (err, results) => {
             if (err) {
                 console.error('Error checking for duplicates:', err);
                 return renderTable(pool, nodeName, res, 'Error checking database. Please try again.');
             }
     
             if (results.length > 0) {
-                return renderTable(pool, nodeName, res, 'Error: Duplicate App ID or Game Name found.');
+                return renderTable(pool, nodeName, res, 'Error: Duplicate App ID found.');
             }
-    
 
             // Validate partitioning rule
             if (partitionFilter && !partitionFilter(new Date(release_date))) {
                 return renderTable(pool, nodeName, res, `Game does not match ${nodeName} partitioning rules.`);
             }
 
-            // Insert game into the current node
             const query = 'INSERT INTO games (app_id, name, release_date, price, developers, publishers) VALUES (?, ?, ?, ?, ?, ?)';
             pool.query(query, [app_id, name, release_date, price, developers, publishers], (err) => {
                 if (err) {
@@ -266,7 +305,6 @@ function setupCrudRoutes(pool, nodeName, partitionFilter) {
                         'Node 1'
                     );
                 } else {
-                    // Replicate to Node 2 or Node 3 based on release date
                     const targetNode = new Date(release_date).getFullYear() < 2010 ? poolNode2 : poolNode3;
                     replicateUpdate(targetNode, query, [app_id, name, release_date, price, developers, publishers], targetNode === poolNode2 ? 'Node 2' : 'Node 3');
                 }
